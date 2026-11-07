@@ -56,6 +56,33 @@ If a new host release turns out to be bad, point the rolling tag back at the pre
 docker buildx imagetools create -t andrewbuckingham/azure-functions-dotnet-isolated-arm64:4-dotnet-isolated10.0 andrewbuckingham/azure-functions-dotnet-isolated-arm64:<previous-version>-dotnet-isolated10.0
 ```
 
+## Maintaining `host-versions`
+
+**What the file is for.** It lists Azure Functions host versions that should keep receiving Microsoft's base-image security patches. The monthly build rebuilds every version in it, plus the newest stable host release, which is always built automatically.
+
+**You usually don't need to touch it.** The newest host release is built automatically, and so are Microsoft's base-image patches. Only older host versions that someone still uses need a line here.
+
+**Add a version when:**
+- a consumer has pinned a host version that is no longer the newest, and they want it to keep getting security patches; or
+- you're pinning an older host version yourself.
+
+**Remove a version when:**
+- nothing pins it any more, or everyone using it has moved on; and
+- you're happy for it to stop receiving base patches.
+
+Removing a version does **not** delete its tags from Docker Hub. Existing tags stay pullable. They just stop being rebuilt.
+
+**Don't add:**
+- the newest release, which is already built; or
+- Microsoft's .NET base image versions (`10.0`, etc.), which are picked up automatically.
+
+**Example.**
+1. The host releases `4.1100.0`. The monthly build now builds `4.1100.0` and points the rolling tag at it.
+2. A team is still on `4.1055.100` and can't move yet. Add `4.1055.100` to `host-versions`, so it keeps getting base patches.
+3. Once the team moves to `4.1100.0`, remove `4.1055.100` from the list at the next change. Its old tags remain on Docker Hub.
+
+**Pinning for consumers.** Pin a host-version tag such as `4.1055.100-dotnet-isolated10.0` if you want to keep that host version. Use the rolling tag `4-dotnet-isolated10.0` if you're happy to follow the newest host. For exact, unchanging bytes, pin a per-run tag or the image digest.
+
 ## Changelog
 
 - **4.1055.100**: initial release.
