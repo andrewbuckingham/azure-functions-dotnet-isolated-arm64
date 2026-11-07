@@ -1,0 +1,42 @@
+## Azure Functions host 4 + .NET 10 isolated worker runtime, for linux/arm64 (Raspberry Pi).
+## Microsoft only publish amd64 images for this and no longer publish the Dockerfile sources
+## (moved to an internal repo, May 2025), so this follows the official custom-container template:
+## https://github.com/Azure/azure-functions-docker/blob/dev/custom-container/template.Dockerfile
+## Build it with build.functions-base.ps1.
+
+# Get the latest host from https://github.com/Azure/azure-functions-host/releases
+ARG HOST_VERSION=4.1055.100
+
+## The builder runs on the build machine's own architecture (no QEMU emulation) and
+## cross-publishes the self-contained host for linux-arm64.
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS host-builder
+ARG HOST_VERSION
+
+RUN git clone --depth 1 --branch v${HOST_VERSION} https://github.com/Azure/azure-functions-host /src/azure-functions-host && \
+    cd /src/azure-functions-host && \
+    dotnet restore --runtime linux-arm64 src/WebJobs.Script.WebHost/WebJobs.Script.WebHost.csproj && \
+    dotnet publish -v q /p:CI=true src/WebJobs.Script.WebHost/WebJobs.Script.WebHost.csproj -c Release --output /azure-functions-host --self-contained --runtime linux-arm64
+
+## .NET runtime and ASP.NET Core shared framework for the isolated worker (the app is not self-contained).
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS dotnet-runtime
+
+## runtime-deps is enough for the self-contained host.
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0
+ARG HOST_VERSION
+
+COPY --from=host-builder [ "/azure-functions-host", "/azure-functions-host" ]
+COPY --from=dotnet-runtime [ "/usr/share/dotnet", "/usr/share/dotnet" ]
+
+# The aspnet image's `dotnet` is found via /usr/share/dotnet; make it resolvable on PATH too.
+RUN ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
+
+# No extension bundle: dotnet-isolated apps reference extensions as NuGet packages instead.
+ENV AzureWebJobsScriptRoot=/home/site/wwwroot \
+    HOME=/home \
+    DOTNET_USE_POLLING_FILE_WATCHER=true \
+    HOST_VERSION=$HOST_VERSION \
+    FUNCTIONS_WORKER_RUNTIME=dotnet-isolated \
+    ASPNETCORE_URLS=http://+:80 \
+    PORT=80
+
+CMD ["/azure-functions-host/Microsoft.Azure.WebJobs.Script.WebHost"]

@@ -1,0 +1,58 @@
+name: Rebuild Functions base image
+
+on:
+  # Monthly, after Microsoft's usual patch cycle, so the SDK and runtime images are fresh
+  schedule:
+    - cron: "0 4 5 * *"
+  # Run by hand, e.g. when a new Azure Functions host version is released
+  workflow_dispatch:
+    inputs:
+      host_version:
+        description: "Azure Functions host version (without the leading v)"
+        required: false
+        default: "4.1055.100"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Keep in step with the host version in Dockerfile.functions-base
+      HOST_VERSION: ${{ inputs.host_version || '4.1055.100' }}
+      IMAGE: andrewbuckingham/azure-functions-dotnet-isolated-arm64
+    steps:
+      - name: Check out this repository (contains only the Dockerfile)
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (the final stage runs a RUN step on arm64)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push linux/arm64 base image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.functions-base
+          platforms: linux/arm64
+          push: true
+          build-args: |
+            HOST_VERSION=${{ env.HOST_VERSION }}
+          # Pull the latest SDK and runtime images rather than reusing cached layers
+          no-cache: true
+          tags: |
+            ${{ env.IMAGE }}:4-dotnet-isolated10.0
+            ${{ env.IMAGE }}:${{ env.HOST_VERSION }}-dotnet-isolated10.0
+            ${{ env.IMAGE }}:${{ env.HOST_VERSION }}-dotnet-isolated10.0-${{ github.run_id }}

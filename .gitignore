@@ -1,0 +1,26 @@
+# This repository only holds the image definition and workflow. Keep it that way,
+# and keep secrets out of it.
+
+# Secrets and local environment files
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*token*
+*secret*
+
+# Build and tool output, if anyone builds locally
+bin/
+obj/
+publish/
+*.log
+
+# Editors and OS files
+.vs/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
