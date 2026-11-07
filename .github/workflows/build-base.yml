@@ -1,0 +1,77 @@
+name: Build Functions base image
+
+# Every run builds:
+#   - the newest stable Azure Functions host release (from GitHub's "latest" release, which skips previews),
+#   - every version listed in host-versions (so pinned tags keep getting base patches).
+# The rolling tag 4-dotnet-isolated10.0 always follows the newest stable host.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "host-versions"
+      - "Dockerfile.functions-base"
+      - ".github/workflows/build-base.yml"
+  schedule:
+    # 5th of each month, after Microsoft's usual patch cycle
+    - cron: "0 4 5 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: andrewbuckingham/azure-functions-dotnet-isolated-arm64
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+
+      - name: Work out which host versions to build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LATEST=$(gh api repos/Azure/azure-functions-host/releases/latest --jq '.tag_name' | sed 's/^v//')
+          echo "Newest stable host: $LATEST"
+          echo "LATEST=$LATEST" >> "$GITHUB_ENV"
+          { echo "$LATEST"; grep -v '^#' host-versions | grep -v '^[[:space:]]*$'; } | sort -u > versions.txt
+          echo "Versions to build:"; cat versions.txt
+
+      - name: Set up QEMU (the final stage runs a RUN step on arm64)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push each host version (linux/arm64)
+        run: |
+          while read -r V; do
+            echo "Building host $V"
+            docker buildx build \
+              --platform linux/arm64 \
+              --build-arg HOST_VERSION="$V" \
+              --no-cache \
+              -f Dockerfile.functions-base \
+              -t "$IMAGE:$V-dotnet-isolated10.0" \
+              -t "$IMAGE:$V-dotnet-isolated10.0-$GITHUB_RUN_ID" \
+              --push .
+          done < versions.txt
+
+      - name: Point the rolling tag at the newest stable host
+        run: |
+          docker buildx imagetools create \
+            -t "$IMAGE:4-dotnet-isolated10.0" \
+            "$IMAGE:$LATEST-dotnet-isolated10.0"
+          echo "Rolling tag 4-dotnet-isolated10.0 now points at host $LATEST"

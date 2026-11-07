@@ -1,0 +1,4 @@
+# Host versions to keep rebuilt each month, so pinned tags keep getting Microsoft's base patches.
+# The newest stable host release is always built too, and the rolling tag follows it.
+# Add a version here when a consumer pins it. Remove it once nothing pins it.
+4.1055.100
