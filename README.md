@@ -6,26 +6,36 @@ Microsoft publish only amd64 images for the Azure Functions isolated host and no
 
 ## Tags
 
-- `4-dotnet-isolated10.0`: the **rolling** tag. This is the stable release. It moves only when a host version has been tested and promoted, and monthly when Microsoft patch the .NET base images.
-- `<host-version>-dotnet-isolated10.0`: fixed to one Functions host version, e.g. `4.1055.100-dotnet-isolated10.0`. Use this to pin or to test a new host before it's promoted.
-- `<host-version>-dotnet-isolated10.0-<run-id>`: a specific build, for rollback.
+Choose how much change you want:
+
+| Tag | Host version | Updates | Use when |
+|---|---|---|---|
+| `4-dotnet-isolated10.0` | Newest stable release | Whenever a new host is released, and monthly for base patches | You want the latest host and accept changes as they come |
+| `<host>-dotnet-isolated10.0`, e.g. `4.1055.100-dotnet-isolated10.0` | Fixed | Monthly, for Microsoft's base patches only | You want a stable host and patches, and control host upgrades |
+| `<host>-dotnet-isolated10.0-<run-id>` | Fixed | Never | Rolling back to an exact build |
+
+Microsoft's .NET base images (SDK and runtime) are rebuilt monthly, so every tag picks up their security patches without any change to the host version.
 
 ## What is in here
 
-- `Dockerfile.functions-base`: the image definition. It builds the Functions host from `Azure/azure-functions-host` at the version in the build, and takes the .NET 10 runtime and ASP.NET Core from Microsoft's images.
-- `host-version`: the host version built on every push to `main`. Publishes the versioned tag only.
-- `stable-host-version`: the host version rebuilt monthly and promoted to the rolling tag.
-- `.github/workflows/build-base.yml`: the build and promotion workflow.
+- `Dockerfile.functions-base`: the image definition. It builds the Functions host from `Azure/azure-functions-host` at the requested version, on top of Microsoft's .NET 10 runtime and ASP.NET Core images.
+- `host-versions`: the host versions kept up to date each month, one per line. Add a version when someone pins it, and remove it when nothing pins it.
+- `.github/workflows/build-base.yml`: the build workflow.
 
 Nothing else belongs in this repository. It is public, so application code must never be added here.
 
-## Workflow triggers
+## When the workflow runs
 
-| Trigger | Builds | Moves the rolling tag? |
-|---|---|---|
-| Push to `main` changing the version files or Dockerfile | `host-version` | No |
-| Monthly schedule (5th) | `stable-host-version` | Yes |
-| Manual run | `host-version` (or the `version` input) | Only if `promote` is ticked |
+- **Monthly** (the 5th), to pick up Microsoft's base patches.
+- **On a push to `main`** that changes the Dockerfile, `host-versions` or the workflow.
+- **Manually**, from the Actions tab.
+
+Each run:
+1. Finds the newest stable Functions host release. GitHub's "latest release" skips previews and release candidates.
+2. Builds that version and every version in `host-versions`.
+3. Moves the rolling tag `4-dotnet-isolated10.0` to the newest stable host.
+
+If the newest host fails to build, the run fails and the rolling tag stays where it was.
 
 ## One-off setup
 
@@ -34,15 +44,17 @@ Nothing else belongs in this repository. It is public, so application code must 
    - `DOCKERHUB_USERNAME`: `andrewbuckingham`
    - `DOCKERHUB_TOKEN`: the access token
 
-## Upgrading the host
+## Pinning and host upgrades
 
-1. Check the release on https://github.com/Azure/azure-functions-host/releases. Use a stable release, not a preview or release candidate, and read it for breaking changes.
-2. Change `host-version` and `ARG HOST_VERSION` in `Dockerfile.functions-base` to the new version, in a pull request. Merging builds the versioned tag only.
-3. Test that versioned tag in a consuming application's own test environment, before promoting it.
-4. When it's proven, change `stable-host-version` to the same version in a pull request, and run the workflow with **promote** ticked. This moves the rolling tag.
-5. Add a line to the changelog below.
+- **To pin a host version for a consumer:** add it to `host-versions`, and the monthly run keeps it patched.
+- **To stop tracking an old version:** remove it from `host-versions` once nothing pins it. Its existing tags stay on Docker Hub.
+- **Testing a new host:** nothing to do here. Each new release is built and published automatically. Consumers who want to test it pull that version's tag.
 
-Monthly runs rebuild whatever is in `stable-host-version`, so they never move the rolling tag to an untested host.
+If a new host release turns out to be bad, point the rolling tag back at the previous version:
+
+```
+docker buildx imagetools create -t andrewbuckingham/azure-functions-dotnet-isolated-arm64:4-dotnet-isolated10.0 andrewbuckingham/azure-functions-dotnet-isolated-arm64:<previous-version>-dotnet-isolated10.0
+```
 
 ## Changelog
 

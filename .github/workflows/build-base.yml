@@ -1,31 +1,21 @@
 name: Build Functions base image
 
-# Two version files control what gets published:
-#   host-version         - built on every push to main, under its versioned tag only (for testing)
-#   stable-host-version  - rebuilt monthly and promoted to the rolling tag (what public users pull)
-# The rolling tag only moves on a scheduled run, or a manual run with "promote" ticked.
+# Every run builds:
+#   - the newest stable Azure Functions host release (from GitHub's "latest" release, which skips previews),
+#   - every version listed in host-versions (so pinned tags keep getting base patches).
+# The rolling tag 4-dotnet-isolated10.0 always follows the newest stable host.
 
 on:
   push:
     branches: [main]
     paths:
-      - "host-version"
-      - "stable-host-version"
+      - "host-versions"
       - "Dockerfile.functions-base"
       - ".github/workflows/build-base.yml"
   schedule:
     # 5th of each month, after Microsoft's usual patch cycle
     - cron: "0 4 5 * *"
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Host version to build (leave blank to use host-version)"
-        required: false
-        default: ""
-      promote:
-        description: "Also move the rolling tag to this version"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -36,29 +26,20 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    outputs:
-      version: ${{ steps.versions.outputs.version }}
-      promote: ${{ steps.versions.outputs.promote }}
+    timeout-minutes: 120
     steps:
       - name: Check out this repository
         uses: actions/checkout@v4
 
-      - name: Work out host version and whether to promote
-        id: versions
+      - name: Work out which host versions to build
         env:
-          EVENT: ${{ github.event_name }}
-          INPUT_VERSION: ${{ inputs.version }}
-          INPUT_PROMOTE: ${{ inputs.promote }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          case "$EVENT" in
-            schedule)          VERSION=$(cat stable-host-version); PROMOTE=true ;;
-            workflow_dispatch) VERSION="${INPUT_VERSION:-$(cat host-version)}"; PROMOTE=${INPUT_PROMOTE:-false} ;;
-            *)                 VERSION=$(cat host-version); PROMOTE=false ;;
-          esac
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "promote=$PROMOTE" >> "$GITHUB_OUTPUT"
-          echo "Building host $VERSION (promote: $PROMOTE)"
+          LATEST=$(gh api repos/Azure/azure-functions-host/releases/latest --jq '.tag_name' | sed 's/^v//')
+          echo "Newest stable host: $LATEST"
+          echo "LATEST=$LATEST" >> "$GITHUB_ENV"
+          { echo "$LATEST"; grep -v '^#' host-versions | grep -v '^[[:space:]]*$'; } | sort -u > versions.txt
+          echo "Versions to build:"; cat versions.txt
 
       - name: Set up QEMU (the final stage runs a RUN step on arm64)
         uses: docker/setup-qemu-action@v3
@@ -74,37 +55,23 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push versioned tags (linux/arm64)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.functions-base
-          platforms: linux/arm64
-          push: true
-          build-args: |
-            HOST_VERSION=${{ steps.versions.outputs.version }}
-          no-cache: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.versions.outputs.version }}-dotnet-isolated10.0
-            ${{ env.IMAGE }}:${{ steps.versions.outputs.version }}-dotnet-isolated10.0-${{ github.run_id }}
+      - name: Build and push each host version (linux/arm64)
+        run: |
+          while read -r V; do
+            echo "Building host $V"
+            docker buildx build \
+              --platform linux/arm64 \
+              --build-arg HOST_VERSION="$V" \
+              --no-cache \
+              -f Dockerfile.functions-base \
+              -t "$IMAGE:$V-dotnet-isolated10.0" \
+              -t "$IMAGE:$V-dotnet-isolated10.0-$GITHUB_RUN_ID" \
+              --push .
+          done < versions.txt
 
-  promote:
-    needs: build
-    if: needs.build.outputs.promote == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Move the rolling tag to the built version
+      - name: Point the rolling tag at the newest stable host
         run: |
           docker buildx imagetools create \
             -t "$IMAGE:4-dotnet-isolated10.0" \
-            "$IMAGE:${{ needs.build.outputs.version }}-dotnet-isolated10.0"
+            "$IMAGE:$LATEST-dotnet-isolated10.0"
+          echo "Rolling tag 4-dotnet-isolated10.0 now points at host $LATEST"
