@@ -16,7 +16,7 @@ Each image carries standard [OCI image labels](https://github.com/opencontainers
 
 ## No warranty or support
 
-These images are provided **as is**, with no warranty of any kind and no support or service level. Nothing here is a guarantee that an image is secure, fit for any purpose, or free of vulnerabilities. Known vulnerabilities change as new ones are published, so scan the image yourself.
+These images are provided **as is**, with no warranty of any kind and no support or service level. Nothing here is a guarantee that an image is secure, fit for any purpose, or free of vulnerabilities. Docker Scout scans each image on Docker Hub, and the results change as new vulnerabilities are published. Most findings come from Microsoft's base images and are fixed when Microsoft patch them, which the monthly rebuild picks up.
 
 - **You are responsible for your own assurance.** Scan, test and approve the image against your own requirements before using it, and again whenever you update it.
 - **Images and tags may change or be removed at any time, without notice.** That includes the rolling tag, version tags, and old run-ID tags.
