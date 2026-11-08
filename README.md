@@ -4,6 +4,12 @@ Microsoft publish only amd64 images for the Azure Functions isolated host and no
 
 **`andrewbuckingham/azure-functions-dotnet-isolated-arm64`**
 
+## About this image
+
+This is a **community-built** image. It is not affiliated with, endorsed by, or supported by Microsoft. It contains Microsoft's open-source Azure Functions host and .NET runtimes, built from their public sources and images.
+
+Each image carries standard [OCI image labels](https://github.com/opencontainers/image-spec/blob/main/annotations.md), which you can read with `docker inspect`: `title`, `description`, `version` (the Functions host version), `source` (this repository), `revision` (the commit that built it), `created`, and `base.name`.
+
 ## Tags
 
 Choose how much change you want:
@@ -86,6 +92,10 @@ Removing a version does **not** delete its tags from Docker Hub. Existing tags s
 ## Changelog
 
 - **4.1055.100**: initial release.
+
+## Licensing
+
+The `LICENSE` in this repository (MIT) covers the Dockerfile, workflow and documentation here. The published image also contains third-party software, including the Azure Functions host and .NET (both MIT-licensed by Microsoft) and a Linux base layer whose packages carry their own licences. Check those projects' terms before redistributing the image.
 
 ## Notes
 
