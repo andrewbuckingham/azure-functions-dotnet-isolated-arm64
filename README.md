@@ -8,11 +8,15 @@ Microsoft publish only amd64 images for the Azure Functions isolated host and no
 
 This is a **community-built** image. It is not affiliated with, endorsed by, or supported by Microsoft. It contains Microsoft's open-source Azure Functions host and .NET runtimes, built from their public sources and images.
 
+- **Base OS:** Ubuntu 24.04 ("noble"), from Microsoft's `mcr.microsoft.com/dotnet/runtime-deps:10.0-noble`. Note that Microsoft's own amd64 Functions images are Debian-based.
+- **Runtime:** the Functions host (self-contained), plus the .NET 10 runtime and ASP.NET Core shared framework for your isolated worker app. No extension bundle: isolated apps reference extensions as NuGet packages.
+- **Port and user:** listens on port 80 and runs as root, like Microsoft's Functions images. See [Running as a non-root user](#running-as-a-non-root-user).
+
 Each image carries standard [OCI image labels](https://github.com/opencontainers/image-spec/blob/main/annotations.md), which you can read with `docker inspect`: `title`, `description`, `version` (the Functions host version), `source` (this repository), `revision` (the commit that built it), `created`, and `base.name`.
 
 ## No warranty or support
 
-These images are provided **as is**, with no warranty of any kind and no support or service level. Nothing here is a guarantee that an image is secure, fit for any purpose, or free of vulnerabilities (the registry's own scans report known findings, which change as new ones are published).
+These images are provided **as is**, with no warranty of any kind and no support or service level. Nothing here is a guarantee that an image is secure, fit for any purpose, or free of vulnerabilities. Known vulnerabilities change as new ones are published, so scan the image yourself.
 
 - **You are responsible for your own assurance.** Scan, test and approve the image against your own requirements before using it, and again whenever you update it.
 - **Images and tags may change or be removed at any time, without notice.** That includes the rolling tag, version tags, and old run-ID tags.
@@ -26,15 +30,22 @@ Choose how much change you want:
 |---|---|---|---|
 | `4-dotnet-isolated10.0` | Newest stable release | Whenever a new host is released, and monthly for base patches | You want the latest host and accept changes as they come |
 | `<host>-dotnet-isolated10.0`, e.g. `4.1055.100-dotnet-isolated10.0` | Fixed | Monthly, for Microsoft's base patches only | You want a stable host and patches, and control host upgrades |
-| `<host>-dotnet-isolated10.0-<run-id>` | Fixed | Never | Rolling back to an exact build |
+| `<host>-dotnet-isolated10.0-<run-id>-<attempt>`, e.g. `4.1055.100-dotnet-isolated10.0-42415879772-1` | Fixed | Never | Rolling back to an exact build |
 
 Microsoft's .NET base images (SDK and runtime) are rebuilt monthly, so every tag picks up their security patches without any change to the host version.
+
+Tags created before November 2026 end in `-<run-id>` without the attempt number.
+
+Every image pushed by the workflow has an SBOM and a build provenance attestation attached. You can read them with `docker buildx imagetools inspect <image> --format '{{ json .SBOM }}'` (or `.Provenance`).
 
 ## What is in here
 
 - `Dockerfile.functions-base`: the image definition. It builds the Functions host from `Azure/azure-functions-host` at the requested version, on top of Microsoft's .NET 10 runtime and ASP.NET Core images.
 - `host-versions`: the host versions kept up to date each month, one per line. Add a version when someone pins it, and remove it when nothing pins it.
 - `.github/workflows/build-base.yml`: the build workflow.
+- `.github/dependabot.yml`: keeps the workflow's actions up to date.
+- `SECURITY.md`: how to report a security problem.
+- `THIRD-PARTY-NOTICES.md`: the licence for Microsoft's template that the Dockerfile is adapted from.
 
 Nothing else belongs in this repository. It is public, so application code must never be added here.
 
@@ -43,20 +54,22 @@ Nothing else belongs in this repository. It is public, so application code must 
 - **Monthly** (the 5th), to pick up Microsoft's base patches.
 - **On a push to `main`** that changes the Dockerfile, `host-versions` or the workflow.
 - **Manually**, from the Actions tab.
+- **On a pull request** that changes those files. Pull requests build and test every version, but never push.
 
 Each run:
-1. Finds the newest stable Functions host release. GitHub's "latest release" skips previews and release candidates.
-2. Builds that version and every version in `host-versions`.
-3. Moves the rolling tag `4-dotnet-isolated10.0` to the newest stable host.
+1. Finds the newest stable Functions host release: the highest `4.x` version number, ignoring previews and release candidates. (GitHub's "latest release" flag isn't used, because Microsoft publish more than one release line at once.)
+2. Builds that version and every version in `host-versions`, each in its own job on a native arm64 runner.
+3. Smoke-tests each image: `dotnet` and the ASP.NET Core 10 runtime are present, and the host starts and answers on port 80.
+4. Pushes each image that passed, with an SBOM and provenance attestation.
+5. Moves the rolling tag `4-dotnet-isolated10.0` to the newest stable host.
 
-If the newest host fails to build, the run fails and the rolling tag stays where it was.
+Each version is built separately. If one fails, the others are still built and pushed. If the newest host fails, the rolling tag stays where it was.
 
 ## One-off setup
 
-1. Create a Docker Hub access token with read and write access to the repository.
-2. In this repository's settings, add secrets:
-   - `DOCKERHUB_USERNAME`: `andrewbuckingham`
-   - `DOCKERHUB_TOKEN`: the access token
+1. Create a Docker Hub personal access token with **Read & Write** access. It doesn't need Delete.
+2. In this repository's settings, add the secret `DOCKERHUB_TOKEN`: the access token. The Docker Hub username isn't secret, and is set in the workflow.
+3. In this repository's settings, under **Security**, turn on **Private vulnerability reporting**, which `SECURITY.md` points to.
 
 ## Pinning and host upgrades
 
@@ -69,6 +82,8 @@ If a new host release turns out to be bad, point the rolling tag back at the pre
 ```
 docker buildx imagetools create -t andrewbuckingham/azure-functions-dotnet-isolated-arm64:4-dotnet-isolated10.0 andrewbuckingham/azure-functions-dotnet-isolated-arm64:<previous-version>-dotnet-isolated10.0
 ```
+
+This only lasts until the next run, which moves the rolling tag back to the newest release. Don't run the workflow, and don't push changes to the files it watches, until Microsoft publish a fixed release.
 
 ## Maintaining `host-versions`
 
@@ -101,12 +116,26 @@ Removing a version does **not** delete its tags from Docker Hub. Existing tags s
 
 - **4.1055.100**: initial release.
 
+## Running as a non-root user
+
+The image runs as root, like Microsoft's Functions images, because the host writes to `/home` and `/azure-functions-host`. The base image already contains an `app` user (UID 1654). To run as that user, give it those directories in your own image, as Microsoft's template does:
+
+```dockerfile
+FROM andrewbuckingham/azure-functions-dotnet-isolated-arm64:4-dotnet-isolated10.0
+COPY --chown=app:app ./publish /home/site/wwwroot
+RUN mkdir -p /azure-functions-host/Secrets /tmp/metrics &&     chown -R app:app /home /azure-functions-host/Secrets /tmp/metrics
+USER app
+ENV ASPNETCORE_URLS=http://+:8080
+```
+
+Non-root processes can't listen on port 80, so this example listens on 8080. Map your ports to match.
+
 ## Licensing
 
-The `LICENSE` in this repository (MIT) covers the Dockerfile, workflow and documentation here. The published image also contains third-party software, including the Azure Functions host and .NET (both MIT-licensed by Microsoft) and a Linux base layer whose packages carry their own licences. Check those projects' terms before redistributing the image.
+The `LICENSE` in this repository (MIT) covers the Dockerfile, workflow and documentation here, except where `THIRD-PARTY-NOTICES.md` says otherwise. The published image also contains third-party software, including the Azure Functions host (MIT, with some components under Apache 2.0), .NET (MIT) and a Linux base layer whose packages carry their own licences. Check those projects' terms before redistributing the image.
 
 ## Notes
 
-- `Dockerfile.functions-base` follows Microsoft's `Azure/azure-functions-docker` `custom-container/template.Dockerfile` (MIT licensed). See `LICENSE`.
+- `Dockerfile.functions-base` follows Microsoft's `Azure/azure-functions-docker` `custom-container/template.Dockerfile` (MIT licensed). See `THIRD-PARTY-NOTICES.md`.
 - Docker Hub automated builds are not used. This workflow does the same job without needing those features.
-- The SDK build stage runs on the build machine's architecture (`FROM --platform=$BUILDPLATFORM`) and cross-publishes for arm64. The final stage runs a `RUN` step on arm64, which is why QEMU is set up.
+- The SDK build stage runs on the build machine's architecture (`FROM --platform=$BUILDPLATFORM`) and cross-publishes for arm64. The final stage has no `RUN` steps, so you can build the image on an amd64 machine without arm64 emulation. The workflow uses native arm64 runners so it can also run the image to test it.
