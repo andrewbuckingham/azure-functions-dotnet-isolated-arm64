@@ -46,6 +46,7 @@ Every image pushed by the workflow has an SBOM and a build provenance attestatio
 - `.github/dependabot.yml`: keeps the workflow's actions up to date.
 - `SECURITY.md`: how to report a security problem.
 - `THIRD-PARTY-NOTICES.md`: the licence for Microsoft's template that the Dockerfile is adapted from.
+- `DOCKERHUB.md`: the description shown on Docker Hub.
 
 Nothing else belongs in this repository. It is public, so application code must never be added here.
 
@@ -70,6 +71,11 @@ Each version is built separately. If one fails, the others are still built and p
 1. Create a Docker Hub personal access token with **Read & Write** access. It doesn't need Delete.
 2. In this repository's settings, add the secret `DOCKERHUB_TOKEN`: the access token. The Docker Hub username isn't secret, and is set in the workflow.
 3. In this repository's settings, under **Security**, turn on **Private vulnerability reporting**, which `SECURITY.md` points to.
+4. On Docker Hub, set the repository's description by hand:
+   - **Short description:** `Unofficial Azure Functions host 4 for .NET 10 isolated apps on linux/arm64 (e.g. Raspberry Pi)`
+   - **Full description:** the contents of `DOCKERHUB.md`. Update it there first whenever it changes.
+
+   It isn't synced automatically, because Docker Hub's API needs a token with Delete scope to change it, and the build workflow shouldn't hold one.
 
 ## Pinning and host upgrades
 
