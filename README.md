@@ -47,20 +47,21 @@ Every image pushed by the workflow has an SBOM and a build provenance attestatio
 - `SECURITY.md`: how to report a security problem.
 - `THIRD-PARTY-NOTICES.md`: the licence for Microsoft's template that the Dockerfile is adapted from.
 - `DOCKERHUB.md`: the description shown on Docker Hub.
+- `test/smoke-app`: a minimal function app with one anonymous HTTP endpoint. The workflow builds it on top of each image to test it. It is never published.
 
-Nothing else belongs in this repository. It is public, so application code must never be added here.
+Nothing else belongs in this repository. It is public, so application code must never be added here: `test/smoke-app` is the only app, and it exists only to test the image.
 
 ## When the workflow runs
 
 - **Monthly** (the 5th), to pick up Microsoft's base patches.
-- **On a push to `main`** that changes the Dockerfile, `host-versions` or the workflow.
-- **Manually**, from the Actions tab.
+- **On a push to `main`** that changes the Dockerfile, `host-versions`, the workflow or the test app.
+- **Manually**, from the Actions tab. A manual run publishes only from `main`; on any other branch it builds and tests without pushing.
 - **On a pull request** that changes those files. Pull requests build and test every version, but never push.
 
 Each run:
 1. Finds the newest stable Functions host release: the highest `4.x` version number, ignoring previews and release candidates. (GitHub's "latest release" flag isn't used, because Microsoft publish more than one release line at once.)
 2. Builds that version and every version in `host-versions`, each in its own job on a native arm64 runner.
-3. Smoke-tests each image: `dotnet` and the ASP.NET Core 10 runtime are present, and the host starts and answers on port 80.
+3. Smoke-tests each image: checks that `dotnet` and the ASP.NET Core 10 runtime are present, then builds `test/smoke-app` on top of it and calls its function over HTTP on port 80. This tests that the host starts the .NET isolated worker and passes requests to it.
 4. Pushes each image that passed, with an SBOM and provenance attestation.
 5. Moves the rolling tag `4-dotnet-isolated10.0` to the newest stable host.
 

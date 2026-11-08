@@ -1,4 +1,4 @@
-# Keeps the SHA-pinned GitHub Actions in the workflow up to date.
+# Keeps the SHA-pinned GitHub Actions, and the smoke-test app's packages, up to date.
 # Docker base images aren't listed: they use floating tags on purpose, so each build picks up
 # Microsoft's monthly patches.
 version: 2
@@ -9,4 +9,12 @@ updates:
       interval: monthly
     groups:
       actions:
+        patterns: ["*"]
+
+  - package-ecosystem: nuget
+    directory: /test/smoke-app
+    schedule:
+      interval: monthly
+    groups:
+      functions-worker:
         patterns: ["*"]

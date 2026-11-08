@@ -14,11 +14,13 @@ on:
       - "host-versions"
       - "Dockerfile.functions-base"
       - ".github/workflows/build-base.yml"
+      - "test/**"
   pull_request:
     paths:
       - "host-versions"
       - "Dockerfile.functions-base"
       - ".github/workflows/build-base.yml"
+      - "test/**"
   schedule:
     # 5th of each month, after Microsoft's usual patch cycle
     - cron: "0 4 5 * *"
@@ -102,7 +104,8 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       HOST_VERSION: ${{ matrix.version }}
-      PUBLISH: ${{ github.event_name != 'pull_request' }}
+      # Only main publishes. Pull requests, and manual runs on other branches, build and test only.
+      PUBLISH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
     steps:
       - name: Check out this repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -147,18 +150,28 @@ jobs:
           docker run --rm --entrypoint dotnet smoke-test:latest --list-runtimes | tee runtimes.txt
           grep -q '^Microsoft.AspNetCore.App 10\.' runtimes.txt
 
-          echo "The Functions host starts and answers on port 80:"
-          docker run -d --name smoke -p 8080:80 smoke-test:latest
-          for i in $(seq 1 90); do
-            if curl -fsS -o /dev/null http://localhost:8080/ 2> /dev/null; then
-              echo "Host answered after ${i}s"
+          echo "A real .NET 10 isolated function app runs on it, end to end:"
+          # The default builder uses the local Docker image store, where the image under test is.
+          docker buildx build --builder default --load \
+            --build-arg BASE_IMAGE=smoke-test:latest -t smoke-app:latest test/smoke-app
+          # Console logging on, so a failure shows the host's and worker's own errors.
+          docker run -d --name smoke -p 8080:80 \
+            -e AzureFunctionsJobHost__logging__console__isEnabled=true \
+            smoke-app:latest
+          DEADLINE=$((SECONDS + 180))
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            # The first request starts the worker, so allow it time to answer.
+            if RESPONSE=$(curl -fsS --max-time 10 http://localhost:8080/api/ping 2> /dev/null); then
+              echo "Function answered after ${SECONDS}s: $RESPONSE"
               docker rm -f smoke > /dev/null
-              exit 0
+              if echo "$RESPONSE" | grep -q 'on Arm64$'; then exit 0; fi
+              echo "::error::Unexpected response from the test function: $RESPONSE"
+              exit 1
             fi
             sleep 1
           done
           docker logs smoke
-          echo "::error::The Functions host didn't answer on port 80 within 90s"
+          echo "::error::The test function didn't answer on port 80"
           exit 1
 
       - name: Log in to Docker Hub
