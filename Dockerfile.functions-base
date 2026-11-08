@@ -18,8 +18,18 @@ FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:${DOTNET_TAG} AS hos
 ARG HOST_VERSION
 
 # Clone the release tag, publish the host, and ship the host's licence files with its binaries.
+#
+# The host's NuGet.config sends every package to Microsoft's Azure DevOps mirror of nuget.org,
+# which only serves anonymous users packages it has already cached. The ReadyToRun compiler
+# for an arm64 build machine (Microsoft.NETCore.App.Crossgen2.linux-arm64) isn't cached there,
+# so it's mapped to nuget.org instead. Every other package still comes from Microsoft's feeds.
 RUN git clone --depth 1 --branch "v${HOST_VERSION}" https://github.com/Azure/azure-functions-host /src/azure-functions-host && \
     cd /src/azure-functions-host && \
+    sed -i \
+      -e 's|<clear />|<clear />\n    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />|' \
+      -e 's|<packageSourceMapping>|<packageSourceMapping>\n    <packageSource key="nuget.org"><package pattern="Microsoft.NETCore.App.Crossgen2.*" /></packageSource>|' \
+      NuGet.config && \
+    grep -q 'pattern="Microsoft.NETCore.App.Crossgen2.\*"' NuGet.config && \
     dotnet restore --runtime linux-arm64 src/WebJobs.Script.WebHost/WebJobs.Script.WebHost.csproj && \
     dotnet publish -v q /p:CI=true src/WebJobs.Script.WebHost/WebJobs.Script.WebHost.csproj -c Release --output /azure-functions-host --self-contained --runtime linux-arm64 && \
     cp LICENSE.txt LICENSE_APACHE.txt /azure-functions-host/
