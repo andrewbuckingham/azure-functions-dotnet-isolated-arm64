@@ -39,4 +39,11 @@ ENV AzureWebJobsScriptRoot=/home/site/wwwroot \
     ASPNETCORE_URLS=http://+:80 \
     PORT=80
 
+# Standard OCI image metadata. Revision and creation time are added by the build workflow.
+LABEL org.opencontainers.image.title="Azure Functions .NET 10 isolated base image (linux/arm64)" \
+      org.opencontainers.image.description="Azure Functions host $HOST_VERSION with the .NET 10 isolated worker runtime for linux/arm64. Community-built; not affiliated with Microsoft." \
+      org.opencontainers.image.version="$HOST_VERSION" \
+      org.opencontainers.image.source="https://github.com/andrewbuckingham/azure-functions-dotnet-isolated-arm64" \
+      org.opencontainers.image.base.name="mcr.microsoft.com/dotnet/runtime-deps:10.0"
+
 CMD ["/azure-functions-host/Microsoft.Azure.WebJobs.Script.WebHost"]

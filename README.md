@@ -4,6 +4,20 @@ Microsoft publish only amd64 images for the Azure Functions isolated host and no
 
 **`andrewbuckingham/azure-functions-dotnet-isolated-arm64`**
 
+## About this image
+
+This is a **community-built** image. It is not affiliated with, endorsed by, or supported by Microsoft. It contains Microsoft's open-source Azure Functions host and .NET runtimes, built from their public sources and images.
+
+Each image carries standard [OCI image labels](https://github.com/opencontainers/image-spec/blob/main/annotations.md), which you can read with `docker inspect`: `title`, `description`, `version` (the Functions host version), `source` (this repository), `revision` (the commit that built it), `created`, and `base.name`.
+
+## No warranty or support
+
+These images are provided **as is**, with no warranty of any kind and no support or service level. Nothing here is a guarantee that an image is secure, fit for any purpose, or free of vulnerabilities (the registry's own scans report known findings, which change as new ones are published).
+
+- **You are responsible for your own assurance.** Scan, test and approve the image against your own requirements before using it, and again whenever you update it.
+- **Images and tags may change or be removed at any time, without notice.** That includes the rolling tag, version tags, and old run-ID tags.
+- **If you depend on it, don't depend on us.** Pin a version (or the image digest) and mirror it into your own registry, or build it yourself from the Dockerfile in this repository.
+
 ## Tags
 
 Choose how much change you want:
@@ -86,6 +100,10 @@ Removing a version does **not** delete its tags from Docker Hub. Existing tags s
 ## Changelog
 
 - **4.1055.100**: initial release.
+
+## Licensing
+
+The `LICENSE` in this repository (MIT) covers the Dockerfile, workflow and documentation here. The published image also contains third-party software, including the Azure Functions host and .NET (both MIT-licensed by Microsoft) and a Linux base layer whose packages carry their own licences. Check those projects' terms before redistributing the image.
 
 ## Notes
 

@@ -63,6 +63,8 @@ jobs:
               --platform linux/arm64 \
               --build-arg HOST_VERSION="$V" \
               --no-cache \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
               -f Dockerfile.functions-base \
               -t "$IMAGE:$V-dotnet-isolated10.0" \
               -t "$IMAGE:$V-dotnet-isolated10.0-$GITHUB_RUN_ID" \
