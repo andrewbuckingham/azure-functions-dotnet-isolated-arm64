@@ -1,9 +1,11 @@
 name: Build Functions base image
 
 # Every run builds:
-#   - the newest stable Azure Functions host release (from GitHub's "latest" release, which skips previews),
+#   - the newest stable Azure Functions host release (the highest 4.x version number),
 #   - every version listed in host-versions (so pinned tags keep getting base patches).
+# Each version is built natively on arm64, smoke-tested, then pushed with an SBOM and provenance.
 # The rolling tag 4-dotnet-isolated10.0 always follows the newest stable host.
+# Pull requests build and test, but never log in or push.
 
 on:
   push:
@@ -12,6 +14,13 @@ on:
       - "host-versions"
       - "Dockerfile.functions-base"
       - ".github/workflows/build-base.yml"
+      - "test/**"
+  pull_request:
+    paths:
+      - "host-versions"
+      - "Dockerfile.functions-base"
+      - ".github/workflows/build-base.yml"
+      - "test/**"
   schedule:
     # 5th of each month, after Microsoft's usual patch cycle
     - cron: "0 4 5 * *"
@@ -20,60 +29,180 @@ on:
 permissions:
   contents: read
 
+# Publishing runs never overlap, so two runs can't race to move the rolling tag.
+# A newer push to a pull request cancels its older test run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
+  DOCKERHUB_USERNAME: andrewbuckingham
   IMAGE: andrewbuckingham/azure-functions-dotnet-isolated-arm64
+  TAG_SUFFIX: dotnet-isolated10.0
+  ROLLING_TAG: 4-dotnet-isolated10.0
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+  plan:
+    name: Work out which host versions to build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.versions.outputs.matrix }}
     steps:
       - name: Check out this repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Work out which host versions to build
+      - name: List versions
+        id: versions
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          LATEST=$(gh api repos/Azure/azure-functions-host/releases/latest --jq '.tag_name' | sed 's/^v//')
-          echo "Newest stable host: $LATEST"
-          echo "LATEST=$LATEST" >> "$GITHUB_ENV"
-          { echo "$LATEST"; grep -v '^#' host-versions | grep -v '^[[:space:]]*$'; } | sort -u > versions.txt
-          echo "Versions to build:"; cat versions.txt
+          set -euo pipefail
+          VERSION_RE='^4\.[0-9]+\.[0-9]+$'
 
-      - name: Set up QEMU (the final stage runs a RUN step on arm64)
-        uses: docker/setup-qemu-action@v3
+          # The highest stable 4.x version, by version number. GitHub's "latest release" flag isn't
+          # used: Microsoft publish more than one release line (for example 4.85x alongside 4.105x),
+          # so the most recently published release isn't always the newest host.
+          LATEST=$(gh api 'repos/Azure/azure-functions-host/releases?per_page=100' \
+                     --jq '.[] | select((.draft or .prerelease) | not) | .tag_name' \
+                   | sed 's/^v//' | grep -E "$VERSION_RE" | sort -V | tail -n 1)
+          if [ -z "$LATEST" ]; then
+            echo "::error::Couldn't find a stable 4.x host release"
+            exit 1
+          fi
+          echo "Newest stable host: $LATEST"
+
+          # host-versions: one version per line; blank lines and # comments are ignored.
+          PINNED=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' host-versions | grep -v '^$' || true)
+          for V in $PINNED; do
+            if ! echo "$V" | grep -Eq "$VERSION_RE"; then
+              echo "::error file=host-versions::'$V' is not a host version like 4.1055.100"
+              exit 1
+            fi
+          done
+
+          VERSIONS=$(printf '%s\n%s\n' "$LATEST" "$PINNED" | grep -v '^$' | sort -uV)
+          MATRIX=$(echo "$VERSIONS" | jq -R . | jq -sc --arg latest "$LATEST" '{include: map({version: ., latest: (. == $latest)})}')
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Host versions"
+            echo "$VERSIONS" | sed "s/^\(.*\)$/- \1/; s/^- $LATEST$/- $LATEST (newest, gets the rolling tag)/"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Host ${{ matrix.version }}
+    needs: plan
+    # Native arm64, so the image is built and smoke-tested without emulation.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    strategy:
+      # One version failing doesn't stop the others getting their patches.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      HOST_VERSION: ${{ matrix.version }}
+      # Only main publishes. Pull requests, and manual runs on other branches, build and test only.
+      PUBLISH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          platforms: arm64
+          persist-credentials: false
+
+      - name: Work out tags and labels
+        run: |
+          set -euo pipefail
+          VERSION_TAG="$IMAGE:$HOST_VERSION-$TAG_SUFFIX"
+          # Never reused: includes the run attempt, so "Re-run jobs" can't overwrite it.
+          RUN_TAG="$VERSION_TAG-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          {
+            echo "VERSION_TAG=$VERSION_TAG"
+            echo "RUN_TAG=$RUN_TAG"
+            echo "CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.functions-base
+          platforms: linux/arm64
+          build-args: HOST_VERSION=${{ env.HOST_VERSION }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ env.CREATED }}
+          # Fresh base images and a clean build every time, so Microsoft's patches are picked up.
+          pull: true
+          no-cache: true
+          load: true
+          tags: smoke-test:latest
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          echo "dotnet is on PATH, with the ASP.NET Core 10 runtime the isolated worker needs:"
+          docker run --rm --entrypoint dotnet smoke-test:latest --list-runtimes | tee runtimes.txt
+          grep -q '^Microsoft.AspNetCore.App 10\.' runtimes.txt
+
+          echo "A real .NET 10 isolated function app runs on it, end to end:"
+          # The default builder uses the local Docker image store, where the image under test is.
+          docker buildx build --builder default --load \
+            --build-arg BASE_IMAGE=smoke-test:latest -t smoke-app:latest test/smoke-app
+          # Console logging on, so a failure shows the host's and worker's own errors.
+          docker run -d --name smoke -p 8080:80 \
+            -e AzureFunctionsJobHost__logging__console__isEnabled=true \
+            smoke-app:latest
+          DEADLINE=$((SECONDS + 180))
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            # The first request starts the worker, so allow it time to answer.
+            if RESPONSE=$(curl -fsS --max-time 10 http://localhost:8080/api/ping 2> /dev/null); then
+              echo "Function answered after ${SECONDS}s: $RESPONSE"
+              docker rm -f smoke > /dev/null
+              if echo "$RESPONSE" | grep -q 'on Arm64$'; then exit 0; fi
+              echo "::error::Unexpected response from the test function: $RESPONSE"
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs smoke
+          echo "::error::The test function didn't answer on port 80"
+          exit 1
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push each host version (linux/arm64)
-        run: |
-          while read -r V; do
-            echo "Building host $V"
-            docker buildx build \
-              --platform linux/arm64 \
-              --build-arg HOST_VERSION="$V" \
-              --no-cache \
-              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-              --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              -f Dockerfile.functions-base \
-              -t "$IMAGE:$V-dotnet-isolated10.0" \
-              -t "$IMAGE:$V-dotnet-isolated10.0-$GITHUB_RUN_ID" \
-              --push .
-          done < versions.txt
+      # Same inputs as the tested build, so the layers come from its cache.
+      - name: Push, with SBOM and provenance attestations
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.functions-base
+          platforms: linux/arm64
+          build-args: HOST_VERSION=${{ env.HOST_VERSION }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ env.CREATED }}
+          sbom: true
+          provenance: mode=max
+          push: true
+          tags: |
+            ${{ env.VERSION_TAG }}
+            ${{ env.RUN_TAG }}
 
-      - name: Point the rolling tag at the newest stable host
+      - name: Point the rolling tag at this build
+        if: env.PUBLISH == 'true' && matrix.latest
         run: |
-          docker buildx imagetools create \
-            -t "$IMAGE:4-dotnet-isolated10.0" \
-            "$IMAGE:$LATEST-dotnet-isolated10.0"
-          echo "Rolling tag 4-dotnet-isolated10.0 now points at host $LATEST"
+          set -euo pipefail
+          docker buildx imagetools create -t "$IMAGE:$ROLLING_TAG" "$RUN_TAG"
+          echo "Rolling tag $ROLLING_TAG now points at host $HOST_VERSION ($RUN_TAG)" | tee -a "$GITHUB_STEP_SUMMARY"
